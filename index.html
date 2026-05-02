@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Twisty Scrambler + Solver</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { margin: 0; background: #0f1220; color: #e9ecff; }
+    .wrap { max-width: 900px; margin: 2rem auto; padding: 1rem; }
+    .card { background: #171b2f; border: 1px solid #2c335a; border-radius: 16px; padding: 1rem; }
+    h1 { margin-top: 0; font-size: 1.6rem; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+    .actions { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1rem 0; }
+    button, select, input { border: 1px solid #3d4780; background: #22294a; color: #f2f4ff; border-radius: 10px; padding: .55rem .75rem; }
+    button { cursor: pointer; font-weight: 600; }
+    button:hover { filter: brightness(1.1); }
+    .output { min-height: 4rem; line-height: 1.6; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #0f1325; border: 1px solid #2a3055; border-radius: 10px; padding: .75rem; white-space: pre-wrap; word-break: break-word; }
+    .small { opacity: .8; font-size: .9rem; }
+    .pill { display: inline-block; font-size: .8rem; padding: .1rem .45rem; border: 1px solid #425099; border-radius: 999px; margin-left: .4rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Twisty Scrambler + Solver <span class="pill" id="status">idle</span></h1>
+      <p class="small">Supports: 2x2, 3x3, 4x4, 5x5, 6x6, 7x7, Pyraminx, Megaminx.</p>
+
+      <div class="row">
+        <label>
+          Puzzle
+          <select id="puzzle">
+            <option>2x2</option><option selected>3x3</option><option>4x4</option><option>5x5</option><option>6x6</option><option>7x7</option><option>Pyraminx</option><option>Megaminx</option>
+          </select>
+        </label>
+        <label>
+          Move delay (ms)
+          <input id="delay" type="number" min="20" max="5000" value="180" />
+        </label>
+      </div>
+
+      <div class="actions">
+        <button id="scrambleBtn">Scramble</button>
+        <button id="solveBtn">Solve</button>
+        <button id="autoBtn">Start AutoSolve</button>
+        <button id="stopBtn">Stop</button>
+      </div>
+
+      <h3>Scramble</h3>
+      <div id="scrambleOut" class="output">(none yet)</div>
+
+      <h3>Solution</h3>
+      <div id="solutionOut" class="output">(none yet)</div>
+
+      <p class="small">Solver behavior: this app solves by reversing the generated scramble sequence (guaranteed solve from solved-state scrambles).</p>
+    </div>
+  </div>
+
+  <script>
+    const defs = {
+      "2x2": { len: 11, moves: ["R","L","U","D","F","B"], suffix: ["", "'", "2"] },
+      "3x3": { len: 20, moves: ["R","L","U","D","F","B"], suffix: ["", "'", "2"] },
+      "4x4": { len: 40, moves: ["R","L","U","D","F","B","Rw","Lw","Uw","Dw","Fw","Bw"], suffix: ["", "'", "2"] },
+      "5x5": { len: 60, moves: ["R","L","U","D","F","B","Rw","Lw","Uw","Dw","Fw","Bw"], suffix: ["", "'", "2"] },
+      "6x6": { len: 80, moves: ["R","L","U","D","F","B","Rw","Lw","Uw","Dw","Fw","Bw","3Rw","3Lw","3Uw","3Dw","3Fw","3Bw"], suffix: ["", "'", "2"] },
+      "7x7": { len: 100, moves: ["R","L","U","D","F","B","Rw","Lw","Uw","Dw","Fw","Bw","3Rw","3Lw","3Uw","3Dw","3Fw","3Bw"], suffix: ["", "'", "2"] },
+      "Pyraminx": { len: 12, moves: ["R","L","U","B","r","l","u","b"], suffix: ["", "'"] },
+      "Megaminx": { len: 70, moves: ["R++","R--","D++","D--","U","U'"], suffix: [""] },
+    };
+
+    const puzzle = document.getElementById('puzzle');
+    const scrambleOut = document.getElementById('scrambleOut');
+    const solutionOut = document.getElementById('solutionOut');
+    const status = document.getElementById('status');
+    const delayInput = document.getElementById('delay');
+
+    let lastScramble = [];
+    let autoOn = false;
+    let runningSolve = false;
+
+    const rand = (n) => Math.floor(Math.random() * n);
+
+    function axisOf(move) {
+      const m = move.replace(/w|3/g, '');
+      if (/[RLr]/.test(m[0])) return 'x';
+      if (/[UDu]/.test(m[0])) return 'y';
+      return 'z';
+    }
+
+    function generateScramble(type) {
+      const { len, moves, suffix } = defs[type];
+      const out = [];
+      let lastAxis = null;
+      for (let i = 0; i < len; i++) {
+        let base, ax;
+        do {
+          base = moves[rand(moves.length)];
+          ax = axisOf(base);
+        } while (ax === lastAxis);
+        lastAxis = ax;
+        out.push(base + suffix[rand(suffix.length)]);
+      }
+      return out;
+    }
+
+    function inverseMove(m) {
+      if (m.endsWith("2")) return m;
+      if (m.endsWith("++")) return m.replace("++", "--");
+      if (m.endsWith("--")) return m.replace("--", "++");
+      if (m.endsWith("'")) return m.slice(0, -1);
+      return m + "'";
+    }
+
+    function buildSolution(scramble) {
+      return [...scramble].reverse().map(inverseMove);
+    }
+
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    function setStatus(t) { status.textContent = t; }
+
+    function doScramble() {
+      const type = puzzle.value;
+      lastScramble = generateScramble(type);
+      scrambleOut.textContent = lastScramble.join(' ');
+      solutionOut.textContent = '(press Solve)';
+      setStatus('scrambled');
+    }
+
+    async function doSolve() {
+      if (runningSolve) return;
+      if (!lastScramble.length) doScramble();
+      runningSolve = true;
+      setStatus('solving...');
+      const solution = buildSolution(lastScramble);
+      const ms = Math.max(20, Number(delayInput.value) || 180);
+      let shown = [];
+      for (const mv of solution) {
+        shown.push(mv);
+        solutionOut.textContent = shown.join(' ');
+        await sleep(ms);
+      }
+      setStatus('solved');
+      runningSolve = false;
+    }
+
+    async function autoLoop() {
+      autoOn = true;
+      setStatus('autosolve on');
+      while (autoOn) {
+        doScramble();
+        await sleep(350);
+        await doSolve();
+        await sleep(500);
+      }
+      setStatus('idle');
+    }
+
+    document.getElementById('scrambleBtn').onclick = doScramble;
+    document.getElementById('solveBtn').onclick = doSolve;
+    document.getElementById('autoBtn').onclick = () => { if (!autoOn) autoLoop(); };
+    document.getElementById('stopBtn').onclick = () => { autoOn = false; };
+  </script>
+</body>
+</html>
